@@ -1,0 +1,169 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+# ----------------------------------------------------------------------
+# Copyright (c) 2016 Pablo Caro. All Rights Reserved.
+# Pablo Caro <me@pcaro.es> - https://pcaro.es/
+# multilauncher.py - 0.3
+# ----------------------------------------------------------------------
+
+
+import argparse
+import os
+import shlex
+import signal
+import subprocess
+import sys
+import textwrap
+import time
+
+__version__ = '0.3'
+
+replace_string = 'XXX'
+default_n_proc = 5
+sleep_time = 0.1
+verbose = True
+
+total_lines = -1
+
+
+def clean_finished(process_list):
+    finished_processes = []
+    for i in range(len(process_list)):
+        if process_list[i][1].poll() is not None:
+            finished_processes.append(i)
+
+    for i in finished_processes[::-1]:
+        if verbose:
+            t = time.strftime('[%H:%M:%S]')
+            p = '[{0}/{1}]'.format(process_list[i][0]+1, total_lines)
+            print(
+                '[F] {0} {1} {2}'.format(
+                    t,
+                    p,
+                    ' '.join(process_list[i][1].args)
+                )
+            )
+        process_list.pop(i)
+
+
+def terminate_all(process_list):
+    for i in range(len(process_list)):
+        # process_list[i][1].terminate()
+        os.killpg(process_list[i][1].pid, signal.SIGKILL)
+
+
+def multi_execute(input_lines, command, n_proc):
+
+    def signal_handler(signal, frame):
+        print('[!] Terminating subprocesses')
+        terminate_all(active_list)
+        sys.exit(1)
+
+    signal.signal(signal.SIGINT, signal_handler)
+
+    active_list = []
+    command_list = [
+        # command.replace(replace_string, line)
+        shlex.split(command.replace(replace_string, line))
+        for line in input_lines
+    ]
+
+    next = 0
+    while next < len(command_list):
+        if len(active_list) > 0:
+            clean_finished(active_list)
+
+        while len(active_list) == n_proc:
+            time.sleep(sleep_time)
+            clean_finished(active_list)
+
+        if verbose:
+            t = time.strftime('[%H:%M:%S]')
+            p = '[{0}/{1}]'.format(next+1, total_lines)
+            print('[S] {0} {1} {2}'.format(t, p, ' '.join(command_list[next])))
+
+        active_list.append((
+            next,
+            subprocess.Popen(
+                command_list[next],
+                stdout=subprocess.DEVNULL,
+                preexec_fn=os.setsid,
+            ),
+        ))
+
+        next += 1
+
+    while len(active_list) > 0:
+        time.sleep(sleep_time)
+        clean_finished(active_list)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog='ml',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description='\n'.join(textwrap.wrap(
+            'Iterates over the lines of <input file>, executing <command> '
+            'once for every input line, and translating "XXX" to that line.'
+        )),
+        epilog='Examples:\n'
+        'ml ips.txt nmap -F -sTU XXX -oA nmap/XXX\n'
+        'ml ips.txt nmap -p- -sT -A XXX -oA nmap/XXX_A\n',
+    )
+
+    parser.add_argument(
+        '--version',
+        action='version',
+        version='ml {0}'.format(__version__),
+    )
+
+    parser.add_argument(
+        '-n', '--nproc',
+        type=int,
+        default=default_n_proc,
+        help='parallel subprocesses (1 for sequential)',
+    )
+
+    # parser.add_argument(
+    #     '-v', '--verbose',
+    #     action='store_true',
+    #     help='print every started and finished subprocess (default)',
+    # )
+
+    parser.add_argument(
+        '-q', '--quiet',
+        action='store_true',
+        help='do not print started and finished subprocesses',
+    )
+
+    parser.add_argument(
+        'input_file',
+        metavar='<input file>',
+        type=argparse.FileType('r'),
+        help='file containing the lines to iterate',
+    )
+
+    parser.add_argument(
+        'command',
+        metavar='<command>',
+        help='command to execute over the input lines',
+        nargs=argparse.REMAINDER,
+    )
+
+    args = parser.parse_args()
+
+    if args.quiet:
+        global verbose
+        verbose = False
+
+    input_lines = args.input_file.read().splitlines()
+
+    global total_lines
+    total_lines = len(input_lines)
+
+    multi_execute(input_lines, ' '.join(args.command), args.nproc)
+
+
+if __name__ == "__main__":
+    main()
