@@ -1,0 +1,130 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+# ----------------------------------------------------------------------
+# Copyright (c) 2016 Pablo Caro. All Rights Reserved.
+# Pablo Caro <me@pcaro.es> - https://pcaro.es/
+# ipranger.py - 0.2
+# ----------------------------------------------------------------------
+
+import re
+import sys
+
+
+__version__ = '0.2'
+
+
+def octets_to_int(ip):
+    octets = ip.split('.')
+
+    int_ip = 0
+    for exp, octet in enumerate(octets[::-1]):
+        int_ip += int(octet) * (256 ** exp)
+
+    return int_ip
+
+
+def int_to_octets(ip):
+    octets = []
+    for i in range(4):
+        octets.append(str(ip % 256))
+        ip //= 256
+
+    return '.'.join(octets[::-1])
+
+
+def range_mode(ip_range):
+    mode_cidr_re = r'^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})$'
+
+    result = re.match(mode_cidr_re, ip_range)
+    if result:
+        for octet in result.groups()[:4]:
+            if int(octet) > 255:
+                return False
+        if int(result.group(5)) > 32:
+            return False
+        return 1
+
+    mode_nmap_re = r'^\d{1,3}(\-\d{1,3})?\.\d{1,3}(\-\d{1,3})?\.\d{1,3}(\-\d{1,3})?\.\d{1,3}(\-\d{1,3})?$'
+
+    if re.match(mode_nmap_re, ip_range):
+        micro_ranges = ip_range.split('.')
+
+        for micro_range in micro_ranges:
+            if micro_range.isnumeric():  # Non-ranged octet
+                if int(micro_range) > 255:
+                    return False
+            else:  # Ranged octet
+                result = re.match(r'^(\d{1,3})\-(\d{1,3})$', micro_range)
+                if result:
+                    a, b = result.groups()
+                    a, b = int(a), int(b)
+                    if a > 255 or b > 255:
+                        return False
+                    if b <= a:
+                        return False
+                else:
+                    return False
+        return 2
+
+    return False
+
+
+def ips_from_range(ip_range, mode):
+    if mode == 1:  # CIDR
+        ip_str, mask = ip_range.split('/')
+        ip_int = octets_to_int(ip_str)
+
+        binary_mask = int(('1' * (32 - int(mask))) or '0', 2)  # Wow, dirty
+
+        ip_base = ip_int & (~binary_mask)
+
+        for i in range(binary_mask + 1):
+            # if (ip_base + i) % 256 == 0:
+            # if ip_base == (ip_base >> 8) << 8:
+            if ((ip_base + i) & 255) == 0:
+                continue
+            print(int_to_octets(ip_base + i))
+
+    elif mode == 2:  # nmap-style
+        octets = ip_range.split('.')
+
+        micro_ranges = [list(map(int, octet.split('-'))) for octet in octets]
+        for i in range(len(micro_ranges)):
+            if len(micro_ranges[i]) == 1:
+                micro_ranges[i].append(micro_ranges[i][0])
+            micro_ranges[i][1] += 1
+
+        for a in range(micro_ranges[0][0], micro_ranges[0][1]):
+            for b in range(micro_ranges[1][0], micro_ranges[1][1]):
+                for c in range(micro_ranges[2][0], micro_ranges[2][1]):
+                    for d in range(micro_ranges[3][0], micro_ranges[3][1]):
+                        print('{}.{}.{}.{}'.format(a, b, c, d))
+
+
+def help():
+    s = 'usage: {} <IP range>\n'.format(sys.argv[0])
+    s += 'IP range may follow one of two specifications:\n'
+    s += '    * CIDR: 192.168.1.0/24, 10.10.0.0/16, 172.16.4.0/20\n'
+    s += '    * Subranges: 192.168.1.1-200, 10.0.2-10.1, 172.16.1-10.1-100\n'
+
+    print(s)
+
+
+def main():
+    if len(sys.argv) != 2:
+        help()
+        sys.exit(1)
+
+    ip_range = sys.argv[1]
+    mode = range_mode(ip_range)
+
+    if not mode:
+        help()
+        sys.exit(1)
+
+    ips_from_range(ip_range, mode)
+
+
+if __name__ == "__main__":
+    main()
